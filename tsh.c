@@ -367,10 +367,6 @@ void sigchld_handler(int sig)
         }
     }
 
-    if(errno != ECHILD){
-        unix_error("waitpid error");
-    }
-
     errno = olderrno;
     return;
 }
