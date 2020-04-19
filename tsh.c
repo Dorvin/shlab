@@ -169,6 +169,11 @@ void eval(char *cmdline)
     char buf[MAXLINE];
     int bg;
     pid_t pid;
+    sigset_t mask_all, mask_one, prev_one;
+
+    sigfillset(&mask_all);
+    sigemptyset(&mask_one);
+    sigaddset(&mask_one, SIGCHLD);
 
     strcpy(buf, cmdline);
     bg = parseline(buf, argv);
@@ -177,7 +182,10 @@ void eval(char *cmdline)
     }
 
     if(!builtin_cmd(argv)){
+        sigprocmask(SIG_BLOCK, &mask_one, &prev_one);
         if((pid = fork()) == 0){
+            sigprocmask(SIG_SETMASK, &prev_one, NULL);
+            setpgid(0, 0);
             if(execve(argv[0], argv, environ) < 0){
                 printf("%s: Command not found\n", argv[0]);
                 exit(0);
@@ -185,12 +193,15 @@ void eval(char *cmdline)
         }
 
         if(!bg){
-            int status;
-            if(waitpid(pid, &status, 0) < 0){
-                unix_error("waitfg: waitpid error");
-            }
+            sigprocmask(SIG_BLOCK, &mask_all, NULL);
+            addjob(jobs, pid, FG, cmdline);
+            sigprocmask(SIG_SETMASK, &prev_one, NULL);
+            waitfg(pid);
         } else {
-            printf("%d %s\n", pid, cmdline);
+            sigprocmask(SIG_BLOCK, &mask_all, NULL);
+            addjob(jobs, pid, BG, cmdline);
+            sigprocmask(SIG_SETMASK, &prev_one, NULL);
+            printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
         }
     }
     return;
@@ -265,6 +276,14 @@ int builtin_cmd(char **argv)
     if(!strcmp(argv[0], "&")){
         return 1;
     }
+    if(!strcmp(argv[0], "fg") || !strcmp(argv[0], "bg")){
+        do_bgfg(argv);
+        return 1;
+    }
+    if(!strcmp(argv[0], "jobs")){
+        listjobs(jobs);
+        return 1;
+    }
     return 0;     /* not a builtin command */
 }
 
@@ -273,6 +292,36 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+    int bg = !strcmp(argv[0], "bg");
+    char* pre_id = argv[1];
+    struct job_t* job;
+    if(pre_id[0] == '%'){
+        int jid = atoi(&pre_id[1]);
+        job = getjobjid(jobs, jid);
+        if(job == NULL){
+            printf("%s: No such job\n", pre_id);
+            return;
+        }
+    } else {
+        int pid = atoi(&pre_id[0]);
+        job = getjobpid(jobs, pid);
+        if(job == NULL){
+            printf("(%d): No such process\n", pid);
+            return;
+        }
+    }
+    if(bg){
+        job->state = BG;
+        kill(-job->pid, SIGCONT);
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    } else {
+        int prev_state = job->state;
+        job->state = FG;
+        if(prev_state == ST){
+            kill(-job->pid, SIGCONT);
+        }
+        waitfg(job->pid);
+    }
     return;
 }
 
@@ -281,6 +330,9 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    while(fgpid(jobs) != 0){
+        sleep(1);
+    }
     return;
 }
 
@@ -297,6 +349,29 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+    int olderrno = errno;
+    int status;
+    pid_t retpid;
+
+    while((retpid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0){
+        if(WIFEXITED(status)){
+            deletejob(jobs, retpid);
+        } else if(WIFSIGNALED(status)){
+            deletejob(jobs, retpid);
+            printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(retpid), retpid, WTERMSIG(status));
+        } else if(WIFSTOPPED(status)){
+            struct job_t* job;
+            job = getjobpid(jobs, retpid);
+            job->state = ST;
+            printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid, WSTOPSIG(status));
+        }
+    }
+
+    if(errno != ECHILD){
+        unix_error("waitpid error");
+    }
+
+    errno = olderrno;
     return;
 }
 
@@ -307,6 +382,11 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
+    pid_t fg_pid = fgpid(jobs);
+    if(fg_pid == 0){
+        return;
+    }
+    kill(-fgpid, sig);
     return;
 }
 
@@ -317,6 +397,11 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+    pid_t fg_pid = fgpid(jobs);
+    if(fg_pid == 0){
+        return;
+    }
+    kill(-fgpid, sig);
     return;
 }
 
