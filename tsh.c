@@ -386,7 +386,7 @@ void sigint_handler(int sig)
     if(fg_pid == 0){
         return;
     }
-    kill(-fgpid, sig);
+    kill(-fg_pid, sig);
     return;
 }
 
@@ -401,7 +401,7 @@ void sigtstp_handler(int sig)
     if(fg_pid == 0){
         return;
     }
-    kill(-fgpid, sig);
+    kill(-fg_pid, sig);
     return;
 }
 
