@@ -85,6 +85,16 @@ void app_error(char *msg);
 typedef void handler_t(int);
 handler_t *Signal(int signum, handler_t *handler);
 
+/* Here are wrapping functions for handling system call error */
+void Sigfillset(sigset_t *set);
+void Sigemptyset(sigset_t *set);
+void Sigaddset(sigset_t *set, int signum);
+void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+
+pid_t Fork(void);
+void Setpgid(pid_t pid, pid_t pgid);
+void Kill(pid_t pid, int sig);
+
 /*
  * main - The shell's main routine 
  */
@@ -171,9 +181,9 @@ void eval(char *cmdline)
     pid_t pid;
     sigset_t mask_all, mask_one, prev_one;
 
-    sigfillset(&mask_all);
-    sigemptyset(&mask_one);
-    sigaddset(&mask_one, SIGCHLD);
+    Sigfillset(&mask_all);
+    Sigemptyset(&mask_one);
+    Sigaddset(&mask_one, SIGCHLD);
 
     strcpy(buf, cmdline);
     bg = parseline(buf, argv);
@@ -182,10 +192,10 @@ void eval(char *cmdline)
     }
 
     if(!builtin_cmd(argv)){
-        sigprocmask(SIG_BLOCK, &mask_one, &prev_one);
+        Sigprocmask(SIG_BLOCK, &mask_one, &prev_one);
         if((pid = fork()) == 0){
-            sigprocmask(SIG_SETMASK, &prev_one, NULL);
-            setpgid(0, 0);
+            Sigprocmask(SIG_SETMASK, &prev_one, NULL);
+            Setpgid(0, 0);
             if(execve(argv[0], argv, environ) < 0){
                 printf("%s: Command not found\n", argv[0]);
                 exit(0);
@@ -193,14 +203,14 @@ void eval(char *cmdline)
         }
 
         if(!bg){
-            sigprocmask(SIG_BLOCK, &mask_all, NULL);
+            Sigprocmask(SIG_BLOCK, &mask_all, NULL);
             addjob(jobs, pid, FG, cmdline);
-            sigprocmask(SIG_SETMASK, &prev_one, NULL);
+            Sigprocmask(SIG_SETMASK, &prev_one, NULL);
             waitfg(pid);
         } else {
-            sigprocmask(SIG_BLOCK, &mask_all, NULL);
+            Sigprocmask(SIG_BLOCK, &mask_all, NULL);
             addjob(jobs, pid, BG, cmdline);
-            sigprocmask(SIG_SETMASK, &prev_one, NULL);
+            Sigprocmask(SIG_SETMASK, &prev_one, NULL);
             printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
         }
     }
@@ -324,13 +334,13 @@ void do_bgfg(char **argv)
     }
     if(bg){
         job->state = BG;
-        kill(-job->pid, SIGCONT);
+        Kill(-job->pid, SIGCONT);
         printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
     } else {
         int prev_state = job->state;
         job->state = FG;
         if(prev_state == ST){
-            kill(-job->pid, SIGCONT);
+            Kill(-job->pid, SIGCONT);
         }
         waitfg(job->pid);
     }
@@ -394,7 +404,7 @@ void sigint_handler(int sig)
     if(fg_pid == 0){
         return;
     }
-    kill(-fg_pid, sig);
+    Kill(-fg_pid, sig);
     return;
 }
 
@@ -409,7 +419,7 @@ void sigtstp_handler(int sig)
     if(fg_pid == 0){
         return;
     }
-    kill(-fg_pid, sig);
+    Kill(-fg_pid, sig);
     return;
 }
 
@@ -630,6 +640,71 @@ void sigquit_handler(int sig)
 {
     printf("Terminating after receipt of SIGQUIT signal\n");
     exit(1);
+}
+
+/*
+ * Sigfillset - wrapper for the sigfillset sys call
+ */
+void Sigfillset(sigset_t *set){
+    if (sigfillset(set) < 0) {
+        unix_error("Sigfillset error");
+    }
+}
+
+/*
+ * Sigemptyset - wrapper for the sigemptyset sys call
+ */
+void Sigemptyset(sigset_t *set){
+    if (sigemptyset(set) < 0) {
+        unix_error("Sigemptyset error");
+    }
+}
+
+/*
+ * Sigaddset - wrapper for the sigaddset sys call
+ */
+void Sigaddset(sigset_t *set, int signum){
+    if (sigaddset(set, signum) < 0) {
+        unix_error("Sigaddset error");
+    }
+}
+
+/*
+ * Sigprocmask - wrapper for the sigprocmask sys call
+ */
+void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset){
+    if (sigprocmask(how, set, oldset) < 0) {
+        unix_error("Sigprocmask error");
+    }
+}
+
+/*
+ * Fork - wrapper for the fork sys call
+ */
+pid_t Fork(void){
+    pid_t pid;
+    if((pid = fork()) < 0){
+        unix_error("Fork error");
+    }
+    return pid;
+}
+
+/*
+ * Setpgid - wrapper for the setpgid sys call
+ */
+void Setpgid(pid_t pid, pid_t pgid){
+    if (setpgid(pid, pgid) < 0) {
+        unix_error("Setpgid error");
+    }
+}
+
+/*
+ * Kill - wrapper for the kill sys call
+ */
+void Kill(pid_t pid, int sig){
+    if (kill(pid, sig) < 0) {
+        unix_error("Kill error");
+    }
 }
 
 
